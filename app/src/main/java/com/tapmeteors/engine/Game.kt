@@ -28,8 +28,14 @@ class Meteor(var x: Float, var z: Float, var vx: Float, var vz: Float, val size:
     var alive = true
 }
 
-class Bullet(var x: Float, var z: Float, var vx: Float, var vz: Float, val hostile: Boolean) {
+class Bullet(var x: Float, var z: Float, var vx: Float, var vz: Float, val hostile: Boolean, val pierce: Boolean = false) {
     var life = if (hostile) 2.6f else 1.35f
+}
+
+/** A collectible boon. Its type is fixed by the wave number — every level teaches a different toy. */
+class PowerUp(var x: Float, var z: Float, val type: Int, var vx: Float, var vz: Float) {
+    var life = 12f
+    var spin = 0f
 }
 
 /**
@@ -62,7 +68,8 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     companion object {
         const val FIELD_W = 40f
         const val FIELD_H = 30f
-        const val TURN_STEP = 0.5236f       // 30° per swipe
+        const val TURN_STEP = 0.6283f       // 36° per swipe (30° + 20%)
+        const val TURN_EASE = 12f           // heading chase rate (10 + 20%)
         const val THRUST = 5.2f             // impulse per tap
         const val MAX_SPEED = 13f
         const val DRAG = 0.55f              // exponential velocity decay /s
@@ -72,6 +79,15 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         const val START_LIVES = 3
         const val EXTRA_LIFE_EVERY = 10000
         const val RESPAWN_INVULN = 2.6f
+
+        // Power-up types, keyed by wave: (wave-1) % 5.
+        const val PWR_RAPID = 0
+        const val PWR_TRIPLE = 1
+        const val PWR_SHIELD = 2
+        const val PWR_PIERCE = 3
+        const val PWR_WARP = 4
+        const val POWER_DURATION = 10f
+        val POWER_NAMES = arrayOf("RAPID FIRE!", "TRIPLE SHOT!", "SHIELD!", "PIERCING BOLTS!", "TIME WARP!")
     }
 
     var state = GameState.TITLE; private set
@@ -93,6 +109,13 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     var saucer: Saucer? = null; private set
     val particles = ArrayList<Particle>()
     private val pool = ArrayDeque<Particle>()
+
+    // --- power-ups (type fixed per wave) ---
+    var powerUp: PowerUp? = null; private set
+    var activePower = -1; private set
+    var powerT = 0f; private set
+    private var powerSpawnT = 0f
+    val wavePowerType: Int get() = (wave - 1) % 5
 
     var wave = 1; private set
     var score = 0; private set
@@ -178,6 +201,8 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         repeat(n) { spawnMeteor() }
         initialRocks = rockMass().coerceAtLeast(1f)
         saucerT = 9f + rng.nextFloat() * 8f
+        powerUp = null
+        powerSpawnT = 5f + rng.nextFloat() * 4f
         beatT = 0.4f
         state = GameState.PLAYING
         flash("WAVE $wave", 2.2f)
@@ -251,36 +276,55 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     }
 
     private fun stepWorld(dt: Float, shipFrozen: Boolean = false) {
+        // --- active power ticks down ---
+        if (activePower >= 0) {
+            powerT -= dt
+            if (powerT <= 0f) { activePower = -1; host.sfx(Sfx.PWR_END) }
+        }
+        val warp = if (activePower == PWR_WARP) 0.45f else 1f
+
         // --- ship ---
         if (shipAlive && !shipFrozen) {
-            val ease = 1f - exp(-10f * dt)
+            val ease = 1f - exp(-TURN_EASE * dt)
             heading += shortestArc(targetHeading - heading) * ease
             val drag = exp(-DRAG * dt)
             shipVx *= drag; shipVz *= drag
             shipX = wrapX(shipX + shipVx * dt)
             shipZ = wrapZ(shipZ + shipVz * dt)
             invuln = maxOf(0f, invuln - dt)
+            if (activePower == PWR_SHIELD) invuln = maxOf(invuln, 0.05f)
 
-            // Auto-fire.
+            // Auto-fire (rapid/triple/pierce reshape the cannon).
             fireT -= dt
-            if (fireT <= 0f && state == GameState.PLAYING && bullets.count { !it.hostile } < MAX_SHOTS) {
-                fireT = FIRE_EVERY
-                bullets.add(
-                    Bullet(
-                        wrapX(shipX + cos(heading) * 1.1f), wrapZ(shipZ + sin(heading) * 1.1f),
-                        cos(heading) * BULLET_SPEED + shipVx * 0.35f,
-                        sin(heading) * BULLET_SPEED + shipVz * 0.35f, hostile = false
+            val interval = if (activePower == PWR_RAPID) FIRE_EVERY * 0.42f else FIRE_EVERY
+            val shotCap = if (activePower == PWR_RAPID || activePower == PWR_TRIPLE) 12 else MAX_SHOTS
+            if (fireT <= 0f && state == GameState.PLAYING && bullets.count { !it.hostile } < shotCap) {
+                fireT = interval
+                val pierce = activePower == PWR_PIERCE
+                val spreads = if (activePower == PWR_TRIPLE) floatArrayOf(-0.28f, 0f, 0.28f) else floatArrayOf(0f)
+                for (off in spreads) {
+                    val a = heading + off
+                    bullets.add(
+                        Bullet(
+                            wrapX(shipX + cos(a) * 1.1f), wrapZ(shipZ + sin(a) * 1.1f),
+                            cos(a) * BULLET_SPEED + shipVx * 0.35f,
+                            sin(a) * BULLET_SPEED + shipVz * 0.35f,
+                            hostile = false, pierce = pierce
+                        )
                     )
-                )
-                host.sfx(Sfx.FIRE, 0.95f + rng.nextFloat() * 0.12f, 0.4f)
+                }
+                host.sfx(Sfx.FIRE, (if (pierce) 0.8f else 0.95f) + rng.nextFloat() * 0.12f, 0.4f)
             }
         }
 
-        // --- meteors drift ---
+        // --- meteors drift (time warp slows the rocks, not you) ---
         for (m in meteors) {
-            m.x = wrapX(m.x + m.vx * dt); m.z = wrapZ(m.z + m.vz * dt)
-            m.angle += m.spin * dt
+            m.x = wrapX(m.x + m.vx * dt * warp); m.z = wrapZ(m.z + m.vz * dt * warp)
+            m.angle += m.spin * dt * warp
         }
+
+        // --- power-up pickup on the field ---
+        updatePowerUp(dt)
 
         updateSaucer(dt)
 
@@ -293,12 +337,14 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             if (b.life <= 0f) { bullets.removeAt(i); i--; continue }
             var consumed = false
 
-            // vs meteors (hostile bolts crack rocks too — no score for those)
+            // vs meteors (hostile bolts crack rocks too — no score for those;
+            // piercing bolts carve straight through)
             for (m in meteors) {
                 if (!m.alive) continue
                 if (hypot(b.x - m.x, b.z - m.z) < m.radius) {
                     breakMeteor(m, scored = !b.hostile)
-                    consumed = true; break
+                    consumed = !b.pierce
+                    break
                 }
             }
             if (!consumed && !b.hostile) saucer?.let { s ->
@@ -348,10 +394,11 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             }
             return
         }
-        s.t += dt
-        val speed = if (s.small) 6.5f else 4.2f
+        val warp = if (activePower == PWR_WARP) 0.6f else 1f
+        s.t += dt * warp
+        val speed = (if (s.small) 6.5f else 4.2f) * warp
         s.x += s.dir * speed * dt
-        s.z += sin(s.t * (if (s.small) 3.1f else 1.7f)) * (if (s.small) 5f else 3f) * dt
+        s.z += sin(s.t * (if (s.small) 3.1f else 1.7f)) * (if (s.small) 5f else 3f) * dt * warp
         s.z = s.z.coerceIn(1.5f, FIELD_H - 1.5f)
 
         // Weapons: the hunter aims; the big one throws rotating spiral bursts.
@@ -389,6 +436,43 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         if ((s.dir > 0f && s.x > FIELD_W + 1f) || (s.dir < 0f && s.x < -1f)) killSaucer(silent = true)
     }
 
+    /** Spawn, drift, expire, and collect the wave's power-up. */
+    private fun updatePowerUp(dt: Float) {
+        val p = powerUp
+        if (p == null) {
+            if (state == GameState.PLAYING) {
+                powerSpawnT -= dt
+                if (powerSpawnT <= 0f) {
+                    var x: Float; var z: Float
+                    do {
+                        x = 3f + rng.nextFloat() * (FIELD_W - 6f)
+                        z = 3f + rng.nextFloat() * (FIELD_H - 6f)
+                    } while (hypot(x - shipX, z - shipZ) < 7f)
+                    val a = rng.nextFloat() * 6.2832f
+                    powerUp = PowerUp(x, z, wavePowerType, cos(a) * 0.7f, sin(a) * 0.7f)
+                    host.sfx(Sfx.PWR_SPAWN)
+                }
+            }
+            return
+        }
+        p.x = wrapX(p.x + p.vx * dt); p.z = wrapZ(p.z + p.vz * dt)
+        p.spin += dt * 3f
+        p.life -= dt
+        if (p.life <= 0f) {
+            powerUp = null
+            powerSpawnT = 10f + rng.nextFloat() * 6f
+            return
+        }
+        if (shipAlive && hypot(p.x - shipX, p.z - shipZ) < 1.7f) {
+            activePower = p.type
+            powerT = POWER_DURATION
+            powerUp = null
+            powerSpawnT = 12f + rng.nextFloat() * 6f
+            flash(POWER_NAMES[p.type], 2f)
+            host.sfx(Sfx.PWR_GET)
+        }
+    }
+
     private fun killSaucer(silent: Boolean) {
         if (saucer != null) {
             if (!silent) host.sfx(Sfx.SAUCER_DIE)
@@ -420,6 +504,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     private fun shipDown() {
         shipAlive = false
         lives--
+        activePower = -1 // boons don't survive the boom
         explode(shipX, 0.6f, shipZ, 0.52f, 90, 8f)
         host.sfx(Sfx.SHIP_DIE)
         if (lives <= 0) {

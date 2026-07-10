@@ -42,7 +42,10 @@ class Sfx(private val context: Context) {
         const val HISCORE = 18
         const val THUMP_LO = 19     // the heartbeat, low note
         const val THUMP_HI = 20     // the heartbeat, high note
-        private const val COUNT = 21
+        const val PWR_SPAWN = 21    // power-up shimmers onto the field
+        const val PWR_GET = 22      // power-up collected
+        const val PWR_END = 23      // boon expires
+        private const val COUNT = 24
         private const val RATE = 22050
     }
 
@@ -86,6 +89,11 @@ class Sfx(private val context: Context) {
                 ids[HISCORE] = load(dir, "hi", arpeggio(intArrayOf(523, 659, 784, 1046, 1318, 1568, 2093), 80, 0.7f))
                 ids[THUMP_LO] = load(dir, "thlo", synthThump(55f))
                 ids[THUMP_HI] = load(dir, "thhi", synthThump(65f))
+                ids[PWR_SPAWN] = load(dir, "pspawn", buf(420) { t ->
+                    sine(500f + 1100f * t, t) * exp(-t * 5f) * 0.35f + sine(750f + 1100f * t, t) * exp(-t * 6f) * 0.2f
+                })
+                ids[PWR_GET] = load(dir, "pget", arpeggio(intArrayOf(659, 880, 1174, 1568), 55, 0.75f))
+                ids[PWR_END] = load(dir, "pend", buf(260) { t -> sine(700f - 380f * t, t) * exp(-t * 8f) * 0.4f })
                 loaded = true
             }
         }.start()

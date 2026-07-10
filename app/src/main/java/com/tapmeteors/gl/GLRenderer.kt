@@ -117,7 +117,8 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
     private fun buildScene() {
         lines.reset(); fx.reset()
         buildStars()
-        buildBorder()
+        buildFloor()
+        game.powerUp?.let { buildPowerUp(it) }
         for (m in game.meteors) buildMeteorGhosted(m)
         game.saucer?.let { buildSaucer(it) }
         if (game.shipAlive) buildShip()
@@ -148,23 +149,61 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         }
     }
 
-    private fun buildBorder() {
-        val throb = 1f + game.beatPulse * 0.5f
-        hsv((game.time * 0.06f + 0.8f) % 1f, 0.9f, 1f)
-        val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
-        val a = (0.5f + 0.45f * game.beatPulse).coerceAtMost(1f)
-        for (yy in floatArrayOf(0f, 0.9f * throb)) {
-            lines.line(0f, yy, 0f, FW, yy, 0f, r, g, b, a)
-            lines.line(0f, yy, FH, FW, yy, FH, r, g, b, a)
-            lines.line(0f, yy, 0f, 0f, yy, FH, r, g, b, a)
-            lines.line(FW, yy, 0f, FW, yy, FH, r, g, b, a)
+    /**
+     * No walls, no rectangle: space just continues (ships wrap at the screen
+     * edge, arcade-style). A faint synthwave floor grid runs past the visible
+     * field in every direction and throbs with the heartbeat.
+     */
+    private fun buildFloor() {
+        hsv((game.time * 0.05f + 0.55f) % 1f, 0.7f, 0.35f)
+        val a = 0.09f + 0.14f * game.beatPulse
+        var gx = -16f
+        while (gx <= FW + 16f) {
+            lines.line(gx, 0f, -16f, gx, 0f, FH + 16f, rgb[0], rgb[1], rgb[2], a)
+            gx += 8f
         }
-        // faint inner grid
-        hsv((game.time * 0.05f + 0.55f) % 1f, 0.7f, 0.3f)
-        var gx = 8f
-        while (gx < FW) { lines.line(gx, 0f, 0f, gx, 0f, FH, rgb[0], rgb[1], rgb[2], 0.1f); gx += 8f }
-        var gz = 7.5f
-        while (gz < FH) { lines.line(0f, 0f, gz, FW, 0f, gz, rgb[0], rgb[1], rgb[2], 0.1f); gz += 7.5f }
+        var gz = -16.5f
+        while (gz <= FH + 16f) {
+            lines.line(-16f, 0f, gz, FW + 16f, 0f, gz, rgb[0], rgb[1], rgb[2], a)
+            gz += 7.5f
+        }
+    }
+
+    /** The wave's collectible: a spinning diamond in the power's signature hue. */
+    private fun buildPowerUp(p: com.tapmeteors.engine.PowerUp) {
+        val hue = powerHue(p.type)
+        val pulse = 0.6f + 0.4f * sin(game.time * 6f)
+        val y = 0.6f + 0.15f * sin(game.time * 3f)
+        val s = 0.75f
+        hsv(hue, 0.85f, 1f)
+        val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
+        // spinning diamond (two crossed squares)
+        for (half in 0 until 2) {
+            val rot = p.spin + half * 0.7854f
+            var px = p.x + cos(rot) * s; var pz = p.z + sin(rot) * s
+            for (i in 1..4) {
+                val a2 = rot + i * 1.5708f
+                val vx = p.x + cos(a2) * s; val vz = p.z + sin(a2) * s
+                lines.line(px, y, pz, vx, y, vz, r, g, b, pulse)
+                px = vx; pz = vz
+            }
+        }
+        // vertical beacon + halo so it reads across the field
+        lines.line(p.x, 0f, p.z, p.x, y + 1.1f, p.z, r, g, b, 0.3f * pulse)
+        ring(p.x, 0.05f, p.z, 1.3f, 12, r, g, b, 0.35f * pulse)
+        fx.v(p.x, y, p.z, 1f, 1f, 1f, pulse)
+        // fading urgency blink in the last three seconds
+        if (p.life < 3f && (p.life * 5f).toInt() % 2 == 0) {
+            ring(p.x, y, p.z, s * 1.6f, 8, r, g, b, 0.5f)
+        }
+    }
+
+    private fun powerHue(type: Int): Float = when (type) {
+        Game.PWR_RAPID -> 0.08f    // ember orange
+        Game.PWR_TRIPLE -> 0.5f    // cyan
+        Game.PWR_SHIELD -> 0.33f   // green
+        Game.PWR_PIERCE -> 0.85f   // magenta
+        else -> 0.72f              // violet time warp
     }
 
     /** Wrap-aware: draw ghost copies when a rock straddles an edge. */
@@ -331,6 +370,14 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
             val cx = 624f - i * 26f
             hud.line(cx, 20f, 0f, cx - 8f, 38f, 0f, 0.35f, 0.95f, 1f, 1f)
             hud.line(cx, 20f, 0f, cx + 8f, 38f, 0f, 0.35f, 0.95f, 1f, 1f)
+        }
+        // active power: name + draining time bar, small, under the wave label
+        if (game.activePower >= 0) {
+            hsv(powerHue(game.activePower), 0.85f, 1f)
+            val name = Game.POWER_NAMES[game.activePower].trimEnd('!')
+            text(name, 320f - StrokeFont.width(name, 1.2f) / 2f, 62f, 1.2f, rgb[0], rgb[1], rgb[2], 0.9f, center = false)
+            val frac = (game.powerT / Game.POWER_DURATION).coerceIn(0f, 1f)
+            hud.line(320f - 60f, 70f, 0f, 320f - 60f + 120f * frac, 70f, 0f, rgb[0], rgb[1], rgb[2], 0.9f)
         }
     }
 

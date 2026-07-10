@@ -11,7 +11,7 @@ glasses.
 
 | Gesture | Action |
 |---|---|
-| **Swipe** on the right temple pad | Turn the ship 30° per swipe — forward = clockwise, back = counter-clockwise |
+| **Swipe** on the right temple pad | Turn the ship 36° per swipe — forward = clockwise, back = counter-clockwise |
 | **Tap** | Thrust (inertia + drift, classic feel). Also starts / retries. |
 | — | **The cannon fires itself.** Point the nose, ride the drift. |
 
@@ -19,9 +19,17 @@ glasses.
 
 - **Waves of neon meteors** — large rocks split into two mediums, mediums
   into two smalls (20 / 50 / 100 points). Each wave adds a rock and a bit of
-  speed; the field wraps on every edge (with wrap-ghost rendering so rocks
-  never pop).
+  speed. **No walls, no arena rectangle**: fly through the edge of the screen
+  and appear on the opposite side, arcade-style (with wrap-ghost rendering so
+  rocks never pop), over an endless heartbeat-throbbing floor grid.
 - **3 ships**, +1 every 10,000 points.
+- **Power-ups that change with the level** — once a wave (and again if you
+  let one fade), a spinning diamond shimmers onto the field. Its gift is
+  keyed to the wave, cycling through five: **RAPID FIRE** (wave 1, 6, ...),
+  **TRIPLE SHOT**, **SHIELD**, **PIERCING BOLTS** (shots carve through whole
+  rock chains), and **TIME WARP** (the rocks slow to half speed — you don't).
+  Ten seconds each, shown as a draining color bar under the wave label; lost
+  with your ship.
 - **The visitor** — a disco saucer of stacked spinning rings and hue-strobing
   spokes that wanders the field throwing **rotating spiral bursts**, and
   every six seconds **drops the beat**: a sub-boom, a screen throb, and a
@@ -41,7 +49,8 @@ All synthesized at first launch, zero audio binaries: the two heartbeat
 thumps, auto-cannon zaps, thrust rumble, three sizes of bit-crushed rock
 explosion, ship derez, the visitor's **portamento warble loop**, its spiral
 volleys and beat-drop sub-boom, warp-in shimmer, wave fanfares, 1UP jingle,
-spawn chime, game-over dirge, and a high-score arpeggio.
+spawn chime, power-up shimmer/collect/expiry, game-over dirge, and a
+high-score arpeggio.
 
 ## Build & install
 
