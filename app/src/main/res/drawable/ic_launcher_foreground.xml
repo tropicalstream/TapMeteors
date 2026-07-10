@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Big neon wireframe meteor, hue-shifted magenta -->
+    <path android:strokeColor="#FFFF46E0" android:strokeWidth="2.6" android:strokeLineJoin="round" android:fillColor="#00000000"
+        android:pathData="M40,26 L54,22 L66,30 L70,42 L62,52 L48,54 L36,46 L34,34 Z" />
+    <!-- crystal ribs to a bright apex -->
+    <path android:strokeColor="#80FF46E0" android:strokeWidth="1.6" android:fillColor="#00000000"
+        android:pathData="M40,26 L52,36 M66,30 L52,36 M62,52 L52,36 M36,46 L52,36" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M52,36 m-2.4,0 a2.4,2.4 0 1,0 4.8,0 a2.4,2.4 0 1,0 -4.8,0" />
+
+    <!-- Smaller violet shard -->
+    <path android:strokeColor="#FFB06CFF" android:strokeWidth="2.2" android:strokeLineJoin="round" android:fillColor="#00000000"
+        android:pathData="M76,58 L84,62 L83,71 L74,72 L70,64 Z" />
+
+    <!-- Meteor glow -->
+    <path android:pathData="M52,37 m-22,0 a22,22 0 1,0 44,0 a22,22 0 1,0 -44,0">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="radial" android:centerX="52" android:centerY="37" android:gradientRadius="24">
+                <item android:offset="0.0" android:color="#33FF46E0" />
+                <item android:offset="1.0" android:color="#00FF46E0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Player ship: cyan chevron, thrusting up-right with amber flame -->
+    <path android:strokeColor="#FF33F0FF" android:strokeWidth="2.8" android:strokeLineCap="round" android:strokeLineJoin="round" android:fillColor="#00000000"
+        android:pathData="M46,88 L34,78 L39,74 M46,88 L44,73 L39,74" />
+    <path android:strokeColor="#FFFFB03C" android:strokeWidth="2.4" android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M37,80 L28,88 M41,76 L35,86" />
+    <!-- auto-fire bolts streaking toward the meteor -->
+    <path android:strokeColor="#FF7DFFF6" android:strokeWidth="2.2" android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M52,70 L56,63 M58,60 L61,54" />
+    <path android:fillColor="#FF7DFFF6" android:pathData="M62,52 m-1.8,0 a1.8,1.8 0 1,0 3.6,0 a1.8,1.8 0 1,0 -3.6,0" />
+</vector>
