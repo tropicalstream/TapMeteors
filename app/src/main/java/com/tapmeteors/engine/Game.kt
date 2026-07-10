@@ -2,6 +2,7 @@ package com.tapmeteors.engine
 
 import com.tapmeteors.SettingsStore
 import com.tapmeteors.audio.Sfx
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.exp
@@ -68,10 +69,6 @@ class Particle {
 class Game(private val store: SettingsStore, private val host: GameHost) {
 
     companion object {
-        // Sized so the play area roughly fills the isometric viewport — the ship
-        // wraps at (or just past) the screen edge, so there's no interior fence.
-        const val FIELD_W = 46f
-        const val FIELD_H = 34f
         const val TURN_STEP = 0.6283f       // 36° per swipe (30° + 20%)
         const val TURN_EASE = 12f           // heading chase rate (10 + 20%)
         const val THRUST = 5.2f             // impulse per tap
@@ -97,9 +94,22 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     var state = GameState.TITLE; private set
     var time = 0f; private set
 
+    // The play field IS the screen: the renderer measures what the camera can
+    // see and sets these to match (plus a hair of margin), so objects wrap
+    // exactly at the screen edge — no interior fence, no visible seam.
+    var fieldW = 46f; private set
+    var fieldH = 40f; private set
+
+    /** Called by the renderer (GL thread, same thread as update) when the viewport is known. */
+    fun setField(w: Float, h: Float) {
+        if (abs(w - fieldW) < 0.01f && abs(h - fieldH) < 0.01f) return
+        fieldW = w
+        fieldH = h
+    }
+
     // --- ship ---
-    var shipX = FIELD_W / 2f; private set
-    var shipZ = FIELD_H / 2f; private set
+    var shipX = fieldW / 2f; private set
+    var shipZ = fieldH / 2f; private set
     var shipVx = 0f; private set
     var shipVz = 0f; private set
     var heading = -1.5708f; private set        // rendered heading (eases)
@@ -226,8 +236,8 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     private fun spawnMeteor() {
         var x: Float; var z: Float
         do {
-            if (rng.nextBoolean()) { x = if (rng.nextBoolean()) 1f else FIELD_W - 1f; z = rng.nextFloat() * FIELD_H }
-            else { x = rng.nextFloat() * FIELD_W; z = if (rng.nextBoolean()) 1f else FIELD_H - 1f }
+            if (rng.nextBoolean()) { x = if (rng.nextBoolean()) 1f else fieldW - 1f; z = rng.nextFloat() * fieldH }
+            else { x = rng.nextFloat() * fieldW; z = if (rng.nextBoolean()) 1f else fieldH - 1f }
         } while (hypot(x - shipX, z - shipZ) < 9f)
         val a = rng.nextFloat() * 6.2832f
         val sp = (0.9f + rng.nextFloat() * 1.1f) * (1f + wave * 0.06f)
@@ -235,7 +245,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     }
 
     private fun spawnShip() {
-        shipX = FIELD_W / 2f; shipZ = FIELD_H / 2f
+        shipX = fieldW / 2f; shipZ = fieldH / 2f
         shipVx = 0f; shipVz = 0f
         heading = -1.5708f; targetHeading = heading
         invuln = RESPAWN_INVULN
@@ -415,8 +425,8 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
                     val small = wave >= 4 && rng.nextFloat() < 0.45f
                     val fromLeft = rng.nextBoolean()
                     saucer = Saucer(
-                        if (fromLeft) 0f else FIELD_W,
-                        FIELD_H * 0.15f + rng.nextFloat() * FIELD_H * 0.7f,
+                        if (fromLeft) 0f else fieldW,
+                        fieldH * 0.15f + rng.nextFloat() * fieldH * 0.7f,
                         small, if (fromLeft) 1f else -1f
                     )
                     host.sfx(Sfx.WARP)
@@ -432,7 +442,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         val speed = (if (s.small) 6.5f else 4.2f) * warp
         s.x += s.dir * speed * dt
         s.z += sin(s.t * (if (s.small) 3.1f else 1.7f)) * (if (s.small) 5f else 3f) * dt * warp
-        s.z = s.z.coerceIn(1.5f, FIELD_H - 1.5f)
+        s.z = s.z.coerceIn(1.5f, fieldH - 1.5f)
 
         // Weapons: the hunter aims; the big one throws rotating spiral bursts.
         s.fireT -= dt
@@ -466,7 +476,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             host.sfx(Sfx.DROP)
         }
 
-        if ((s.dir > 0f && s.x > FIELD_W + 1f) || (s.dir < 0f && s.x < -1f)) killSaucer(silent = true)
+        if ((s.dir > 0f && s.x > fieldW + 1f) || (s.dir < 0f && s.x < -1f)) killSaucer(silent = true)
     }
 
     /** Spawn, drift, expire, and collect the wave's power-up. */
@@ -478,8 +488,8 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
                 if (powerSpawnT <= 0f) {
                     var x: Float; var z: Float
                     do {
-                        x = 3f + rng.nextFloat() * (FIELD_W - 6f)
-                        z = 3f + rng.nextFloat() * (FIELD_H - 6f)
+                        x = 3f + rng.nextFloat() * (fieldW - 6f)
+                        z = 3f + rng.nextFloat() * (fieldH - 6f)
                     } while (hypot(x - shipX, z - shipZ) < 7f)
                     val a = rng.nextFloat() * 6.2832f
                     powerUp = PowerUp(x, z, wavePowerType, cos(a) * 0.7f, sin(a) * 0.7f)
@@ -588,14 +598,14 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     }
 
     private fun centerSafe(): Boolean {
-        for (m in meteors) if (hypot(m.x - FIELD_W / 2f, m.z - FIELD_H / 2f) < m.radius + 5f) return false
+        for (m in meteors) if (hypot(m.x - fieldW / 2f, m.z - fieldH / 2f) < m.radius + 5f) return false
         return true
     }
 
     // ------------------------------------------------------------- helpers
 
-    private fun wrapX(v: Float) = ((v % FIELD_W) + FIELD_W) % FIELD_W
-    private fun wrapZ(v: Float) = ((v % FIELD_H) + FIELD_H) % FIELD_H
+    private fun wrapX(v: Float) = ((v % fieldW) + fieldW) % fieldW
+    private fun wrapZ(v: Float) = ((v % fieldH) + fieldH) % fieldH
 
     private fun shortestArc(d: Float): Float {
         var a = d

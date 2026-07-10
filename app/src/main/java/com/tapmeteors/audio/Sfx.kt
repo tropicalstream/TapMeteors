@@ -3,6 +3,8 @@ package com.tapmeteors.audio
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.SoundPool
+import android.os.Handler
+import android.os.HandlerThread
 import java.io.BufferedOutputStream
 import java.io.DataOutputStream
 import java.io.File
@@ -68,8 +70,17 @@ class Sfx(private val context: Context) {
     private var saucerStream = 0
     private val rng = Random(11)
 
+    // SoundPool.play/stop are binder calls into the audio service; they can
+    // block for a few ms. The game triggers sounds from the GL render thread,
+    // so every call is posted to this thread instead — the render thread never
+    // waits on the audio service.
+    private var thread: HandlerThread? = null
+    private var handler: Handler? = null
+
     fun loadAsync() {
-        Thread {
+        thread = HandlerThread("tapmeteors-sfx").apply { start() }
+        handler = Handler(thread!!.looper)
+        handler?.post {
             runCatching {
                 val dir = File(context.cacheDir, "sfx").apply { mkdirs() }
                 ids[TURN] = load(dir, "turn", buf(60) { t -> sq(760f + 500f * t, t) * exp(-t * 26f) * 0.35f })
@@ -100,26 +111,43 @@ class Sfx(private val context: Context) {
                 ids[PWR_END] = load(dir, "pend", buf(260) { t -> sine(700f - 380f * t, t) * exp(-t * 8f) * 0.4f })
                 loaded = true
             }
-        }.start()
+        }
     }
 
+    /** Safe from any thread; the actual SoundPool call runs on the sfx thread. */
     fun play(id: Int, pitch: Float = 1f, vol: Float = 1f) {
         if (!loaded || id < 0 || id >= COUNT) return
-        val s = ids[id]; if (s == 0) return
-        val duckMul = if (duckProvider?.invoke() == true) 0.4f else 1f
-        val v = (volume * vol * duckMul).coerceIn(0f, 1f); if (v <= 0f) return
-        pool.play(s, v, v, 1, 0, pitch.coerceIn(0.5f, 2f))
+        handler?.post {
+            val s = ids[id]
+            if (s == 0) return@post
+            val duckMul = if (duckProvider?.invoke() == true) 0.4f else 1f
+            val v = (volume * vol * duckMul).coerceIn(0f, 1f)
+            if (v <= 0f) return@post
+            pool.play(s, v, v, 1, 0, pitch.coerceIn(0.5f, 2f))
+        }
     }
 
     fun startSaucerLoop() {
-        if (!loaded || saucerStream != 0) return
-        val duckMul = if (duckProvider?.invoke() == true) 0.4f else 1f
-        val v = (volume * 0.4f * duckMul).coerceIn(0f, 1f)
-        saucerStream = pool.play(ids[SAUCER_LOOP], v, v, 0, -1, 1f)
+        handler?.post {
+            if (!loaded || saucerStream != 0) return@post
+            val duckMul = if (duckProvider?.invoke() == true) 0.4f else 1f
+            val v = (volume * 0.4f * duckMul).coerceIn(0f, 1f)
+            saucerStream = pool.play(ids[SAUCER_LOOP], v, v, 0, -1, 1f)
+        }
     }
 
-    fun stopSaucerLoop() { if (saucerStream != 0) { pool.stop(saucerStream); saucerStream = 0 } }
-    fun release() { runCatching { pool.release() } }
+    fun stopSaucerLoop() {
+        handler?.post {
+            if (saucerStream != 0) { pool.stop(saucerStream); saucerStream = 0 }
+        }
+    }
+
+    fun release() {
+        handler?.post { runCatching { pool.release() } }
+        thread?.quitSafely()
+        thread = null
+        handler = null
+    }
 
     // ------------------------------------------------------------ synthesis
 

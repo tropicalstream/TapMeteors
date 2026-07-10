@@ -43,8 +43,9 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
     private val fx = Batch(6000)
     private val hud = Batch(4000)
 
-    private val FW = Game.FIELD_W
-    private val FH = Game.FIELD_H
+    // Field size mirrors the game's (which we set from the measured viewport).
+    private val FW get() = game.fieldW
+    private val FH get() = game.fieldH
 
     // Scratch offset arrays for wrap-ghost rendering — reused every frame so the
     // draw loop allocates nothing (per-frame allocation was causing GC stutter).
@@ -61,13 +62,14 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         }
     }
 
-    // Fixed starfield below the play plane (hue drifts slowly).
+    // Fixed starfield below the play plane (hue drifts slowly). Spans well past
+    // any plausible field size so it always runs off every screen edge.
     private val stars: FloatArray = Random(3).let { r ->
         FloatArray(90 * 3) { i ->
             when (i % 3) {
-                0 -> r.nextFloat() * (FW + 24f) - 12f
+                0 -> r.nextFloat() * 80f - 16f
                 1 -> -2.5f - r.nextFloat() * 5f
-                else -> r.nextFloat() * (FH + 24f) - 12f
+                else -> r.nextFloat() * 68f - 16f
             }
         }
     }
@@ -95,6 +97,14 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         val now = System.nanoTime()
         val dt = if (lastNanos == 0L) 0.016f else ((now - lastNanos) / 1e9f).coerceIn(0f, 0.05f)
         lastNanos = now
+
+        // The whole screen is the field of play: size the wrap bounds to what
+        // this camera actually shows (+ a hair so wraps happen just off-screen).
+        val eyes = if (sbs) 2 else 1
+        val vw = if (sbs) width / 2 else width
+        val aspect = vw.toFloat() / height.toFloat()
+        game.setField(2f * V * aspect + 1f, 2f * V / TILT_SIN + 1f)
+
         game.update(dt)
 
         buildScene(); buildHud()
@@ -103,15 +113,14 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glUseProgram(program)
 
-        // Fixed isometric camera over the field centre.
+        // Straight-on tilted camera over the field centre: the ground plane
+        // projects to a screen-aligned rectangle, so the field can exactly
+        // fill the screen (a 45°-yaw iso camera can't — its footprint is a
+        // diamond, which is what put visible wrap seams inside the view).
         val cx = FW / 2f; val cz = FH / 2f
-        Matrix.setLookAtM(view, 0, cx + 26f, 34f, cz + 26f, cx, 0f, cz, 0f, 1f, 0f)
+        Matrix.setLookAtM(view, 0, cx, CAM_D * TILT_SIN, cz + CAM_D * TILT_COS, cx, 0f, cz, 0f, 1f, 0f)
 
-        val eyes = if (sbs) 2 else 1
-        val vw = if (sbs) width / 2 else width
-        val aspect = vw.toFloat() / height.toFloat()
-        val v = 19f
-        Matrix.orthoM(proj, 0, -v * aspect, v * aspect, -v, v, 1f, 300f)
+        Matrix.orthoM(proj, 0, -V * aspect, V * aspect, -V, V, 1f, 300f)
         Matrix.multiplyMM(mvp, 0, proj, 0, view, 0)
 
         for (e in 0 until eyes) {
@@ -178,14 +187,15 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
 
     /**
      * No walls and no fence: an endless synthwave floor grid that runs off
-     * every screen edge, so the whole screen reads as open field. It brightens
-     * with the heartbeat. Objects that reach the wrap bounds are ghost-drawn on
-     * the far side (see the *Ghosted / ghostOffsets paths) so the ship visibly
-     * reemerges across the seam instead of popping.
+     * every screen edge, so the whole screen reads as open field. CONSTANT
+     * brightness — an earlier heartbeat throb pushed it over the waveguide's
+     * visibility threshold on each thump, which read as a grid flashing into
+     * view. Objects at the wrap bounds are ghost-drawn on the far side (see
+     * the *Ghosted / ghostOffsets paths) so the ship visibly reemerges.
      */
     private fun buildFloor() {
         hsv((game.time * 0.05f + 0.55f) % 1f, 0.7f, 0.4f)
-        val a = 0.12f + 0.18f * game.beatPulse
+        val a = 0.16f
         val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
         val over = 10f   // draw past the play bounds on all sides — no visible edge
         var gx = -over
@@ -475,6 +485,14 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
     }
 
     companion object {
+        // Straight-on camera, tilted 58° down: enough pitch that the vector
+        // shapes keep their 3D pop, shallow enough to read as a synthwave
+        // horizon. V is the ortho half-height in world units.
+        private const val V = 17f
+        private const val TILT_SIN = 0.8480f   // sin 58°
+        private const val TILT_COS = 0.5299f   // cos 58°
+        private const val CAM_D = 60f
+
         private const val VERT = """#version 300 es
         in vec3 aPos; in vec4 aColor; uniform mat4 uMVP; uniform float uPointSize; out vec4 vColor;
         void main() { gl_Position = uMVP * vec4(aPos, 1.0); gl_PointSize = uPointSize; vColor = aColor; }"""

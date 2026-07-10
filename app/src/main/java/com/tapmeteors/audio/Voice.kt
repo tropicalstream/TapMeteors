@@ -6,6 +6,7 @@ import android.media.MediaPlayer
 import android.os.Handler
 import android.os.HandlerThread
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
@@ -15,19 +16,20 @@ import java.util.Locale
 import kotlin.random.Random
 
 /**
- * The space sweeper's voice — a chronically under-appreciated custodian of
- * the cosmos. Clips are pre-generated fish.audio S2.1-Pro MP3s (voice model
- * 1864d40339ae4dbabf832f844c8d1d6f) baked by tools/generate_tts.py into
- * assets/tts/<id>.mp3 (or <id>_<n>.mp3 for a phrase with several variants).
- * Until they exist, Android TTS pitched LOW stands in.
+ * The space sweeper's voice. Preferred source: pre-generated fish.audio
+ * S2.1-Pro MP3s (voice model 1864d40339ae4dbabf832f844c8d1d6f) baked by
+ * tools/generate_tts.py into assets/tts/<clipId>.mp3.
  *
- * EVERYTHING runs on a dedicated background thread. TextToSpeech.speak() and
- * MediaPlayer.prepare() can block for tens of milliseconds; the game calls
- * say() from the GL render thread, so doing that work inline would hitch the
- * frame (a stutter every time a line fired). say() now only posts a message.
+ * CRITICAL PERFORMANCE RULE — no speech synthesis at run time, ever.
+ * Android TTS runs in a separate service process; synthesizing a line pegs
+ * this device's little cores and stutters the GL thread no matter which of
+ * OUR threads asks for it. So the Android-TTS fallback is baked ONCE on
+ * first boot: every line missing a fish clip is rendered to a WAV in
+ * filesDir/ttsfb/, then the TTS engine is shut down for good. During play,
+ * only cached files are played (MediaPlayer, on a dedicated voice thread).
  *
- * A phrase id may map to several variant lines (a JSON array) — one is picked
- * at random each time so frequent lines don't repeat.
+ * A phrase id may map to several variant lines (a JSON array) — one is
+ * picked at random per utterance so frequent lines don't repeat.
  */
 class Voice(private val context: Context) {
 
@@ -40,22 +42,24 @@ class Voice(private val context: Context) {
         private set
 
     private val phrases = HashMap<String, List<String>>()
+    private val queue = ArrayDeque<String>()          // resolved clipIds; voice thread only
     private var player: MediaPlayer? = null
-    private var tts: TextToSpeech? = null
-    @Volatile private var ttsReady = false
-    private val queue = ArrayDeque<String>()          // touched only on the voice thread
-    private val rng = Random(System.nanoTime())
-
     private var thread: HandlerThread? = null
     private var handler: Handler? = null
+    private val rng = Random(System.nanoTime())
+    private val fbDir: File by lazy { File(context.filesDir, "ttsfb").apply { mkdirs() } }
+    private var baker: TextToSpeech? = null
 
     fun load() {
         thread = HandlerThread("tapmeteors-voice").apply { start() }
         handler = Handler(thread!!.looper)
-        handler?.post { initOnThread() }
+        handler?.post {
+            loadPhrases()
+            bakeMissingFallbacks()
+        }
     }
 
-    private fun initOnThread() {
+    private fun loadPhrases() {
         runCatching {
             val txt = context.assets.open("phrases.json").bufferedReader().use { it.readText() }
             val o = JSONObject(txt)
@@ -64,23 +68,85 @@ class Voice(private val context: Context) {
                 phrases[k] = if (v is JSONArray) List(v.length()) { i -> v.getString(i) } else listOf(v.toString())
             }
         }.onFailure { Log.e(TAG, "phrases.json", it) }
-        tts = TextToSpeech(context) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale.UK
-                tts?.setPitch(0.78f)          // fallback melancholy
-                tts?.setSpeechRate(0.92f)
-                tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
-                    override fun onStart(id: String?) {}
-                    override fun onDone(id: String?) { isSpeaking = false; postPump() }
+    }
+
+    /** clipId for a phrase id + variant index ("id" for single, "id_n" for variants). */
+    private fun clipId(id: String, idx: Int, count: Int) = if (count > 1) "${id}_$idx" else id
+
+    private fun hasAsset(clipId: String): Boolean =
+        runCatching { context.assets.openFd("tts/$clipId.mp3").use { }; true }.getOrDefault(false)
+
+    private fun fallbackFile(clipId: String) = File(fbDir, "$clipId.wav")
+
+    // ------------------------------------------------- one-time fallback bake
+
+    private fun bakeMissingFallbacks() {
+        val jobs = ArrayList<Pair<String, String>>() // clipId -> text
+        for ((id, variants) in phrases) {
+            for (i in variants.indices) {
+                val cid = clipId(id, i, variants.size)
+                if (hasAsset(cid)) continue
+                val f = fallbackFile(cid)
+                if (f.exists() && f.length() > 44) continue
+                jobs.add(cid to variants[i])
+            }
+        }
+        if (jobs.isEmpty()) return
+        Log.i(TAG, "baking ${jobs.size} fallback lines (first boot only)")
+        baker = TextToSpeech(context) { status ->
+            if (status != TextToSpeech.SUCCESS) { baker = null; return@TextToSpeech }
+            handler?.post {
+                val t = baker ?: return@post
+                t.language = Locale.UK
+                t.setPitch(0.78f)          // fallback melancholy
+                t.setSpeechRate(0.92f)
+                t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {}
+                    override fun onDone(utteranceId: String?) {
+                        handler?.post {
+                            utteranceId?.let {
+                                val tmp = File(fbDir, "$it.wav.tmp")
+                                if (tmp.exists()) tmp.renameTo(fallbackFile(it))
+                            }
+                        }
+                        // Breathe between jobs: even the one-time bake must not
+                        // sustain CPU pressure if the player starts immediately.
+                        handler?.postDelayed({ bakeNext() }, 250)
+                    }
                     @Deprecated("Deprecated in Java")
-                    override fun onError(id: String?) { isSpeaking = false; postPump() }
+                    override fun onError(utteranceId: String?) {
+                        handler?.post { utteranceId?.let { File(fbDir, "$it.wav.tmp").delete() } }
+                        handler?.postDelayed({ bakeNext() }, 250)
+                    }
                 })
-                ttsReady = true
+                bakeQueue.addAll(jobs)
+                bakeNext()
             }
         }
     }
 
-    /** Called from the render thread — must return instantly. Just posts. */
+    private val bakeQueue = ArrayDeque<Pair<String, String>>()
+
+    private fun bakeNext() {
+        val t = baker ?: return
+        val job = bakeQueue.pollFirst()
+        if (job == null) {
+            runCatching { t.shutdown() }   // engine gone for good: zero runtime synthesis
+            baker = null
+            Log.i(TAG, "fallback bake complete")
+            return
+        }
+        val (cid, text) = job
+        val tmp = File(fbDir, "$cid.wav.tmp")
+        val params = android.os.Bundle()
+        @Suppress("DEPRECATION")
+        val r = t.synthesizeToFile(text, params, tmp, cid)
+        if (r != TextToSpeech.SUCCESS) handler?.post { bakeNext() }
+    }
+
+    // --------------------------------------------------------------- playback
+
+    /** Called from the render thread — returns instantly (just posts). */
     fun say(id: String, urgent: Boolean = false) {
         if (volume <= 0.01f) return
         val h = handler ?: return
@@ -88,40 +154,43 @@ class Voice(private val context: Context) {
     }
 
     private fun sayOnThread(id: String, urgent: Boolean) {
-        if (!phrases.containsKey(id)) return
+        val variants = phrases[id] ?: return
+        if (variants.isEmpty()) return
+        val idx = if (variants.size > 1) rng.nextInt(variants.size) else 0
+        val cid = clipId(id, idx, variants.size)
         if (urgent) {
             queue.clear()
             stopCurrent()
-            queue.add(id)
+            queue.add(cid)
         } else {
             // One pending mutter at most; the sweeper doesn't backlog complaints.
             if (isSpeaking || queue.isNotEmpty()) return
-            queue.add(id)
+            queue.add(cid)
         }
-        pumpOnThread()
+        pump()
     }
 
-    private fun postPump() { handler?.post { pumpOnThread() } }
-
-    private fun pumpOnThread() {
+    private fun pump() {
         if (isSpeaking) return
-        val id = queue.pollFirst() ?: return
-        val variants = phrases[id]
-        if (variants.isNullOrEmpty()) return
-        val idx = if (variants.size > 1) rng.nextInt(variants.size) else 0
-        val clipId = if (variants.size > 1) "${id}_$idx" else id
-        isSpeaking = true
-        val clip = findClip(clipId)
-        if (clip != null) playClip(clip) else speakFallback(variants[idx], clipId)
+        val cid = queue.pollFirst() ?: return
+        // Cached sources only. If neither exists (first-boot bake still running),
+        // the line is silently skipped — never synthesized on the spot.
+        if (hasAsset(cid)) {
+            runCatching { context.assets.openFd("tts/$cid.mp3") }.getOrNull()?.let { playFd(it); return }
+        }
+        val f = fallbackFile(cid)
+        if (f.exists()) playFile(f)
     }
 
-    private fun findClip(clipId: String): Any? {
-        val f = File(File(context.filesDir, "tts"), "$clipId.mp3")
-        if (f.exists()) return f
-        return runCatching { context.assets.openFd("tts/$clipId.mp3") }.getOrNull()
+    private fun playFd(fd: android.content.res.AssetFileDescriptor) {
+        startPlayer { mp -> mp.setDataSource(fd.fileDescriptor, fd.startOffset, fd.length); fd.close() }
     }
 
-    private fun playClip(src: Any) {
+    private fun playFile(f: File) {
+        startPlayer { mp -> mp.setDataSource(f.absolutePath) }
+    }
+
+    private fun startPlayer(source: (MediaPlayer) -> Unit) {
         runCatching {
             stopPlayer()
             val mp = MediaPlayer()
@@ -130,32 +199,19 @@ class Voice(private val context: Context) {
                     .setUsage(AudioAttributes.USAGE_GAME)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
             )
-            when (src) {
-                is File -> mp.setDataSource(src.absolutePath)
-                is android.content.res.AssetFileDescriptor -> {
-                    mp.setDataSource(src.fileDescriptor, src.startOffset, src.length)
-                    src.close()
-                }
-            }
+            source(mp)
             mp.setVolume(volume, volume)
-            mp.setOnCompletionListener { isSpeaking = false; stopPlayer(); pumpOnThread() }
-            mp.setOnErrorListener { _, _, _ -> isSpeaking = false; stopPlayer(); postPump(); true }
-            mp.prepare()   // off the render thread now, so a blocking prepare is fine
+            mp.setOnCompletionListener { isSpeaking = false; stopPlayer(); pump() }
+            mp.setOnErrorListener { _, _, _ -> isSpeaking = false; stopPlayer(); pump(); true }
+            mp.prepare()   // local file header parse, on the voice thread
             mp.start()
+            isSpeaking = true
             player = mp
         }.onFailure { isSpeaking = false; Log.w(TAG, "clip failed", it) }
     }
 
-    private fun speakFallback(text: String, utteranceId: String) {
-        if (!ttsReady) { isSpeaking = false; return }
-        val params = android.os.Bundle()
-        params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume)
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
-    }
-
     private fun stopCurrent() {
         stopPlayer()
-        if (ttsReady) runCatching { tts?.stop() }
         isSpeaking = false
     }
 
@@ -167,7 +223,8 @@ class Voice(private val context: Context) {
     fun release() {
         handler?.post {
             stopCurrent()
-            runCatching { tts?.shutdown() }
+            runCatching { baker?.shutdown() }
+            baker = null
         }
         thread?.quitSafely()
         thread = null
