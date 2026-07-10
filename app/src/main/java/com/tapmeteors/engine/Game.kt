@@ -15,6 +15,8 @@ interface GameHost {
     fun sfx(id: Int, pitch: Float = 1f, vol: Float = 1f)
     fun startSaucerLoop()
     fun stopSaucerLoop()
+    /** The space sweeper mutters a pre-generated line (audio only). */
+    fun say(id: String, urgent: Boolean = false)
 }
 
 /** A drifting neon rock. size: 2 large, 1 medium, 0 small. */
@@ -135,14 +137,17 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
     private var beatHi = false
     var beatPulse = 0f; private set            // renderer border throb
 
-    // --- flourish ---
+    // --- flourish: the sweeper's log entries ---
     var message: String? = null; private set
     var messageHue = 0f; private set
     private var messageUntil = 0f
     private val clearCries = arrayOf(
-        "GRID CLEAR!", "MOO-VELOUS!", "UNGULATE APPROVED", "YAK ATTACK AVERTED",
-        "SHEEP MAY SAFELY GRAZE", "THE LLAMA SALUTES YOU", "BOVINE AND BEYOND",
+        "COSMOS: SWEPT", "PLANET SAVED. AGAIN.", "MOSTLY HARMLESS NOW",
+        "DEBRIS FILED UNDER D", "ANOTHER DAY, ANOTHER APOCALYPSE",
+        "PAPERWORK PENDING", "DON'T PANIC. IT'S HANDLED.",
     )
+    private var clearIdx = 0
+    private var deathAlt = false
 
     private val rng = Random(System.nanoTime())
 
@@ -189,6 +194,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         nextLifeAt = EXTRA_LIFE_EVERY
         store.games++
         host.sfx(Sfx.START)
+        host.say("start")
         beginWave()
         spawnShip()
     }
@@ -255,7 +261,9 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
                 if (state == GameState.PLAYING && meteors.isEmpty() && saucer == null) {
                     state = GameState.WAVE_CLEAR
                     stateT = 2.4f
-                    flash(clearCries[rng.nextInt(clearCries.size)], 2.2f)
+                    flash(clearCries[clearIdx % clearCries.size], 2.2f)
+                    host.say("wave_${(clearIdx % 7) + 1}")
+                    clearIdx++
                     host.sfx(Sfx.CLEAR)
                 }
             }
@@ -351,7 +359,8 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
                 if (s.alive && hypot(b.x - s.x, b.z - s.z) < s.radius + 0.3f) {
                     addScore(if (s.small) 1000 else 200)
                     explode(s.x, 0.8f, s.z, rng.nextFloat(), 70, 7f)
-                    flash(if (s.small) "HUNTER DOWN +1000" else "SAUCER DOWN +200", 1.6f)
+                    flash(if (s.small) "HUNTER SWEPT +1000" else "CRUISER SWEPT +200", 1.6f)
+                    host.say("saucer_down")
                     killSaucer(silent = false)
                     consumed = true
                 }
@@ -389,7 +398,8 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
                     )
                     host.sfx(Sfx.WARP)
                     host.startSaucerLoop()
-                    flash(if (small) "HUNTER INBOUND" else "VISITOR INBOUND", 1.5f)
+                    flash(if (small) "IMPERIAL HUNTER INBOUND" else "IMPERIAL CRUISER INBOUND", 1.5f)
+                    host.say(if (small) "saucer_small" else "saucer_big")
                 }
             }
             return
@@ -470,6 +480,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             powerSpawnT = 12f + rng.nextFloat() * 6f
             flash(POWER_NAMES[p.type], 2f)
             host.sfx(Sfx.PWR_GET)
+            host.say("power_up")
         }
     }
 
@@ -511,10 +522,14 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             state = GameState.GAME_OVER
             killSaucer(silent = true)
             host.sfx(Sfx.GAMEOVER)
-            if (score >= highScore && score > 0) { host.sfx(Sfx.HISCORE); flash("NEW HIGH SCORE!", 3.5f) }
+            if (score >= highScore && score > 0) {
+                host.sfx(Sfx.HISCORE); flash("NEW HIGH SCORE!", 3.5f); host.say("hiscore", urgent = true)
+            } else host.say("game_over", urgent = true)
         } else {
             state = GameState.SHIP_DOWN
             stateT = 2.0f
+            deathAlt = !deathAlt
+            host.say(if (deathAlt) "death_1" else "death_2", urgent = true)
         }
     }
 
@@ -525,6 +540,7 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             lives++
             flash("1UP!", 2f)
             host.sfx(Sfx.LIFE)
+            host.say("one_up")
         }
         if (score > highScore) { highScore = score; store.highScore = score }
     }

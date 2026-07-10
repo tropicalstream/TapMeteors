@@ -340,17 +340,18 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         when (game.state) {
             GameState.TITLE -> {
                 text("TAPMETEORS", 320f, 140f, 4.4f, hr, hg, hb)
-                text("SWIPE TO TURN - TAP TO THRUST", 320f, 226f, 1.7f, 1f, 1f, 1f, pulse)
-                text("CANNONS FIRE THEMSELVES", 320f, 262f, 1.5f, 0.7f, 0.9f, 1f)
-                if (game.highScore > 0) text("HIGH ${game.highScore}", 320f, 320f, 1.8f, 0.6f, 1f, 0.7f)
-                text("TAP TO START", 320f, 380f, 2f, 0.5f, 1f, 0.6f, pulse)
+                text("THE COSMOS WON'T SWEEP ITSELF", 320f, 196f, 1.5f, 0.7f, 0.9f, 1f)
+                text("SWIPE TO TURN - TAP TO THRUST", 320f, 250f, 1.7f, 1f, 1f, 1f, pulse)
+                text("CANNONS FIRE THEMSELVES", 320f, 284f, 1.5f, 0.7f, 0.9f, 1f)
+                if (game.highScore > 0) text("HIGH ${game.highScore}", 320f, 330f, 1.8f, 0.6f, 1f, 0.7f)
+                text("TAP TO CLOCK IN", 320f, 386f, 2f, 0.5f, 1f, 0.6f, pulse)
             }
             GameState.GAME_OVER -> {
                 bar()
-                text("GAME OVER", 320f, 200f, 3.8f, 1f, 0.4f, 0.35f)
+                text("PLANET DOOMED", 320f, 200f, 3.6f, 1f, 0.4f, 0.35f)
                 text("SCORE ${game.score}", 320f, 258f, 2.2f, 1f, 1f, 1f)
                 text("WAVE ${game.wave} - BEST ${game.bestWave}", 320f, 300f, 1.6f, 0.7f, 0.9f, 1f)
-                text("TAP TO RIDE AGAIN", 320f, 366f, 1.9f, 0.5f, 1f, 0.6f, pulse)
+                text("TAP TO CLOCK BACK IN", 320f, 366f, 1.9f, 0.5f, 1f, 0.6f, pulse)
             }
             else -> bar()
         }

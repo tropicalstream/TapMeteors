@@ -12,6 +12,7 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import com.tapmeteors.audio.Sfx
+import com.tapmeteors.audio.Voice
 import com.tapmeteors.engine.Game
 import com.tapmeteors.engine.GameHost
 import com.tapmeteors.gl.GLRenderer
@@ -31,6 +32,7 @@ class MainActivity : Activity(), GameHost {
 
     private lateinit var store: SettingsStore
     private lateinit var sfx: Sfx
+    private lateinit var voice: Voice
     private lateinit var game: Game
     private lateinit var glView: GLSurfaceView
     private lateinit var renderer: GLRenderer
@@ -43,6 +45,7 @@ class MainActivity : Activity(), GameHost {
         super.onCreate(savedInstanceState)
         store = SettingsStore(this)
         sfx = Sfx(this).also { it.loadAsync() }
+        voice = Voice(this).also { it.load() }
         game = Game(store, this)
         renderer = GLRenderer(game).also { it.sbs = store.sbs }
 
@@ -63,6 +66,7 @@ class MainActivity : Activity(), GameHost {
     override fun sfx(id: Int, pitch: Float, vol: Float) = sfx.play(id, pitch, vol)
     override fun startSaucerLoop() = sfx.startSaucerLoop()
     override fun stopSaucerLoop() = sfx.stopSaucerLoop()
+    override fun say(id: String, urgent: Boolean) = voice.say(id, urgent)
 
     // --------------------------------------------------------------- input
 
@@ -97,9 +101,9 @@ class MainActivity : Activity(), GameHost {
                 val dx = ev.x - downX
                 // In play the pad only ever means "turn": classify by the SIGN
                 // of horizontal travel past a small dead-zone; anything shorter
-                // is a tap = thrust. Sign inverted vs the physical gesture.
+                // is a tap = thrust. (Forward/back mapping reversed per test.)
                 val dead = max(16f, 0.02f * resources.displayMetrics.widthPixels)
-                if (abs(dx) >= dead) turn(left = dx > 0) else thrust()
+                if (abs(dx) >= dead) turn(left = dx < 0) else thrust()
             }
         }
         return true
@@ -121,6 +125,7 @@ class MainActivity : Activity(), GameHost {
 
     override fun onDestroy() {
         sfx.release()
+        voice.release()
         super.onDestroy()
     }
 
