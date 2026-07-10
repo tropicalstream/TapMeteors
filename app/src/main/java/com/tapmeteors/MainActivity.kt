@@ -46,6 +46,7 @@ class MainActivity : Activity(), GameHost {
         store = SettingsStore(this)
         sfx = Sfx(this).also { it.loadAsync() }
         voice = Voice(this).also { it.load() }
+        sfx.duckProvider = { voice.isSpeaking } // sound effects duck while the sweeper talks
         game = Game(store, this)
         renderer = GLRenderer(game).also { it.sbs = store.sbs }
 

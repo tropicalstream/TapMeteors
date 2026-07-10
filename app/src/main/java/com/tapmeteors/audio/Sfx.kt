@@ -60,7 +60,11 @@ class Sfx(private val context: Context) {
 
     private val ids = IntArray(COUNT)
     @Volatile private var loaded = false
-    @Volatile var volume = 0.9f
+    // Kept well under Voice's default so the sweeper's mutter always reads
+    // clearly; also ducked further, below, whenever he's actually speaking.
+    @Volatile var volume = 0.6f
+    /** Lets the host ask "is the voice speaking right now?" to duck around it. */
+    @Volatile var duckProvider: (() -> Boolean)? = null
     private var saucerStream = 0
     private val rng = Random(11)
 
@@ -102,13 +106,15 @@ class Sfx(private val context: Context) {
     fun play(id: Int, pitch: Float = 1f, vol: Float = 1f) {
         if (!loaded || id < 0 || id >= COUNT) return
         val s = ids[id]; if (s == 0) return
-        val v = (volume * vol).coerceIn(0f, 1f); if (v <= 0f) return
+        val duckMul = if (duckProvider?.invoke() == true) 0.4f else 1f
+        val v = (volume * vol * duckMul).coerceIn(0f, 1f); if (v <= 0f) return
         pool.play(s, v, v, 1, 0, pitch.coerceIn(0.5f, 2f))
     }
 
     fun startSaucerLoop() {
         if (!loaded || saucerStream != 0) return
-        val v = (volume * 0.4f).coerceIn(0f, 1f)
+        val duckMul = if (duckProvider?.invoke() == true) 0.4f else 1f
+        val v = (volume * 0.4f * duckMul).coerceIn(0f, 1f)
         saucerStream = pool.play(ids[SAUCER_LOOP], v, v, 0, -1, 1f)
     }
 

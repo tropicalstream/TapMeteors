@@ -5,36 +5,50 @@ import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.speech.tts.TextToSpeech
 import android.util.Log
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.ArrayDeque
 import java.util.Locale
+import kotlin.random.Random
 
 /**
  * The space sweeper's voice — a chronically under-appreciated custodian of
  * the cosmos. Clips are pre-generated fish.audio S2.1-Pro MP3s (voice model
  * 1864d40339ae4dbabf832f844c8d1d6f) baked by tools/generate_tts.py into
- * assets/tts/<id>.mp3; no network at run time. Until they're generated,
- * Android TTS pitched LOW and slowed stands in — gloom is non-negotiable.
+ * assets/tts/<id>.mp3 (or <id>_<n>.mp3 for a phrase with several variants);
+ * no network at run time. Until they're generated, Android TTS pitched LOW
+ * and slowed stands in — gloom is non-negotiable.
+ *
+ * A phrase id may map to several variant lines in phrases.json (a JSON
+ * array instead of a single string) — one is picked at random each time so
+ * frequent lines (an imperial ship showing up, say) don't repeat.
  */
 class Voice(private val context: Context) {
 
     private val TAG = "TapMeteorsVoice"
 
-    @Volatile var volume = 0.9f
+    @Volatile var volume = 1.0f
 
-    private val phrases = HashMap<String, String>()
+    /** True while a line is actually sounding — lets Sfx duck around it. */
+    val isSpeaking: Boolean get() = speaking
+
+    private val phrases = HashMap<String, List<String>>()
     private var player: MediaPlayer? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private val queue = ArrayDeque<String>()
     @Volatile private var speaking = false
+    private val rng = Random(System.nanoTime())
 
     fun load() {
         runCatching {
             val txt = context.assets.open("phrases.json").bufferedReader().use { it.readText() }
             val o = JSONObject(txt)
-            for (k in o.keys()) phrases[k] = o.getString(k)
+            for (k in o.keys()) {
+                val v = o.get(k)
+                phrases[k] = if (v is JSONArray) List(v.length()) { i -> v.getString(i) } else listOf(v.toString())
+            }
         }.onFailure { Log.e(TAG, "phrases.json", it) }
         tts = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
@@ -77,14 +91,18 @@ class Voice(private val context: Context) {
             id = queue.pollFirst() ?: return
             speaking = true
         }
-        val clip = findClip(id)
-        if (clip != null) playClip(clip) else speakFallback(id)
+        val variants = phrases[id]
+        if (variants.isNullOrEmpty()) { speaking = false; return }
+        val idx = if (variants.size > 1) rng.nextInt(variants.size) else 0
+        val clipId = if (variants.size > 1) "${id}_$idx" else id
+        val clip = findClip(clipId)
+        if (clip != null) playClip(clip) else speakFallback(variants[idx], clipId)
     }
 
-    private fun findClip(id: String): Any? {
-        val f = File(File(context.filesDir, "tts"), "$id.mp3")
+    private fun findClip(clipId: String): Any? {
+        val f = File(File(context.filesDir, "tts"), "$clipId.mp3")
         if (f.exists()) return f
-        return runCatching { context.assets.openFd("tts/$id.mp3") }.getOrNull()
+        return runCatching { context.assets.openFd("tts/$clipId.mp3") }.getOrNull()
     }
 
     private fun playClip(src: Any) {
@@ -112,12 +130,11 @@ class Voice(private val context: Context) {
         }.onFailure { speaking = false; Log.w(TAG, "clip failed", it) }
     }
 
-    private fun speakFallback(id: String) {
-        val text = phrases[id]
-        if (!ttsReady || text == null) { speaking = false; return }
+    private fun speakFallback(text: String, utteranceId: String) {
+        if (!ttsReady) { speaking = false; return }
         val params = android.os.Bundle()
         params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume)
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, id)
+        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
     }
 
     private fun stopCurrent() {

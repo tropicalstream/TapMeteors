@@ -51,10 +51,14 @@ cosmos. He mutters about it, aloud, in a permanently unimpressed voice.
 
 ## The sweeper's voice
 
-Eighteen lines of dry cosmic resignation — clock-in grumbles, wave-clear
-non-celebrations, imperial complaints ("They never wipe their boots."),
-death soliloquies, and a high-score line delivered with total indifference.
-Pre-generated with **fish.audio S2.1 Pro**
+Dozens of lines of dry cosmic resignation — clock-in grumbles, wave-clear
+non-celebrations, death soliloquies, and a high-score line delivered with
+total indifference. Imperial ship arrivals get **10 random variants each**
+for the cruiser and the hunter (20 total) so the empire never says the same
+thing twice in a row. Speech always plays **louder than sound effects**:
+the sweeper's voice is the loudest thing in the mix, and every effect ducks
+further while he's actually talking, so his mutter never gets buried under
+an explosion. Pre-generated with **fish.audio S2.1 Pro**
 ([free developer API](https://fish.audio/blog/s2-1-pro-free-api/)) using the
 player voice model
 [`1864d40339ae4dbabf832f844c8d1d6f`](https://fish.audio/app/m/1864d40339ae4dbabf832f844c8d1d6f/):

@@ -11,6 +11,10 @@ Usage:
   python3 tools/generate_tts.py    # writes app/src/main/assets/tts/<id>.mp3
   ./gradlew assembleDebug          # clips ship inside the APK
 
+A phrase may be a single string ("id": "...") or a list of variants
+("id": ["...", "...", ...]) that the app picks between at random — those
+generate one file per variant, named <id>_<index>.mp3.
+
 Already-generated phrases are skipped; delete a file to force regeneration.
 Requires: pip install requests
 """
@@ -41,9 +45,18 @@ def main() -> None:
     phrases = json.loads(PHRASES.read_text())
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Flatten to (output_stem, text) pairs: single string -> "id", list -> "id_0", "id_1", ...
+    jobs: list[tuple[str, str]] = []
+    for pid, value in phrases.items():
+        if isinstance(value, list):
+            for i, text in enumerate(value):
+                jobs.append((f"{pid}_{i}", text))
+        else:
+            jobs.append((pid, value))
+
     done = skipped = failed = 0
-    for pid, text in phrases.items():
-        out = OUT_DIR / f"{pid}.mp3"
+    for stem, text in jobs:
+        out = OUT_DIR / f"{stem}.mp3"
         if out.exists() and out.stat().st_size > 0:
             skipped += 1
             continue
@@ -66,10 +79,10 @@ def main() -> None:
         )
         if resp.status_code == 200 and resp.content:
             out.write_bytes(resp.content)
-            print(f"  ok  {pid}: {text[:60]}")
+            print(f"  ok  {stem}: {text[:60]}")
             done += 1
         else:
-            print(f" FAIL {pid}: HTTP {resp.status_code} {resp.text[:120]}")
+            print(f" FAIL {stem}: HTTP {resp.status_code} {resp.text[:120]}")
             failed += 1
         time.sleep(0.4)  # be polite to the free tier
 
