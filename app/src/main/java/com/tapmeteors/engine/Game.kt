@@ -68,8 +68,10 @@ class Particle {
 class Game(private val store: SettingsStore, private val host: GameHost) {
 
     companion object {
-        const val FIELD_W = 40f
-        const val FIELD_H = 30f
+        // Sized so the play area roughly fills the isometric viewport — the ship
+        // wraps at (or just past) the screen edge, so there's no interior fence.
+        const val FIELD_W = 46f
+        const val FIELD_H = 34f
         const val TURN_STEP = 0.6283f       // 36° per swipe (30° + 20%)
         const val TURN_EASE = 12f           // heading chase rate (10 + 20%)
         const val THRUST = 5.2f             // impulse per tap

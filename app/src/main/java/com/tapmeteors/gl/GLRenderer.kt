@@ -177,26 +177,25 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
     }
 
     /**
-     * No walls: the floor grid covers exactly the play area and stops, so its
-     * edge quietly marks where the world wraps (Asteroids-style) without a
-     * boxed-in border. It brightens with the heartbeat. Objects crossing the
-     * edge are ghost-drawn on the far side (see the *Ghosted / ghostOffsets
-     * paths), so the ship visibly reemerges rather than popping.
+     * No walls and no fence: an endless synthwave floor grid that runs off
+     * every screen edge, so the whole screen reads as open field. It brightens
+     * with the heartbeat. Objects that reach the wrap bounds are ghost-drawn on
+     * the far side (see the *Ghosted / ghostOffsets paths) so the ship visibly
+     * reemerges across the seam instead of popping.
      */
     private fun buildFloor() {
         hsv((game.time * 0.05f + 0.55f) % 1f, 0.7f, 0.4f)
         val a = 0.12f + 0.18f * game.beatPulse
-        val edge = 0.22f + 0.3f * game.beatPulse   // the boundary lines glow a touch stronger
-        var gx = 0f
-        while (gx <= FW + 0.01f) {
-            val e = if (gx < 0.01f || gx > FW - 0.01f) edge else a
-            lines.line(gx, 0f, 0f, gx, 0f, FH, rgb[0], rgb[1], rgb[2], e)
+        val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
+        val over = 10f   // draw past the play bounds on all sides — no visible edge
+        var gx = -over
+        while (gx <= FW + over) {
+            lines.line(gx, 0f, -over, gx, 0f, FH + over, r, g, b, a)
             gx += 5f
         }
-        var gz = 0f
-        while (gz <= FH + 0.01f) {
-            val e = if (gz < 0.01f || gz > FH - 0.01f) edge else a
-            lines.line(0f, 0f, gz, FW, 0f, gz, rgb[0], rgb[1], rgb[2], e)
+        var gz = -over
+        while (gz <= FH + over) {
+            lines.line(-over, 0f, gz, FW + over, 0f, gz, r, g, b, a)
             gz += 5f
         }
     }
