@@ -23,9 +23,12 @@ cosmos. He mutters about it, aloud, in a permanently unimpressed voice.
 
 - **Waves of neon meteors** — large rocks split into two mediums, mediums
   into two smalls (20 / 50 / 100 points). Each wave adds a rock and a bit of
-  speed. **No walls, no arena rectangle**: fly through the edge of the screen
-  and appear on the opposite side, arcade-style (with wrap-ghost rendering so
-  rocks never pop), over an endless heartbeat-throbbing floor grid.
+  speed. **No walls, no arena rectangle**: fly through the edge of the play
+  area and reemerge on the opposite side, true to the original. Everything
+  that wraps — ship, rocks, bolts, pickups — is **ghost-drawn on the far
+  side** as it crosses, so it slides across the seam instead of popping. The
+  heartbeat-throbbing floor grid covers exactly the play area, its glowing
+  edge quietly marking where the world loops.
 - **3 ships**, +1 every 10,000 points.
 - **Power-ups that change with the level** — once a wave (and again if you
   let one fade), a spinning diamond shimmers onto the field. Its gift is

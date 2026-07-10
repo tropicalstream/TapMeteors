@@ -46,6 +46,21 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
     private val FW = Game.FIELD_W
     private val FH = Game.FIELD_H
 
+    // Scratch offset arrays for wrap-ghost rendering — reused every frame so the
+    // draw loop allocates nothing (per-frame allocation was causing GC stutter).
+    private val ghX = FloatArray(2)
+    private val ghZ = FloatArray(2)
+
+    /** Fill out[] with the wrap offsets (0, and +/-span) an object near an edge needs. Returns 1 or 2. */
+    private fun ghostOffsets(pos: Float, margin: Float, span: Float, out: FloatArray): Int {
+        out[0] = 0f
+        return when {
+            pos < margin -> { out[1] = span; 2 }
+            pos > span - margin -> { out[1] = -span; 2 }
+            else -> 1
+        }
+    }
+
     // Fixed starfield below the play plane (hue drifts slowly).
     private val stars: FloatArray = Random(3).let { r ->
         FloatArray(90 * 3) { i ->
@@ -114,29 +129,41 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
 
     // ------------------------------------------------------- scene build
 
+    // Indexed loops throughout (no Iterator allocation on the render thread).
     private fun buildScene() {
         lines.reset(); fx.reset()
         buildStars()
         buildFloor()
         game.powerUp?.let { buildPowerUp(it) }
-        for (m in game.meteors) buildMeteorGhosted(m)
+        val ms = game.meteors
+        for (i in 0 until ms.size) buildMeteorGhosted(ms[i])
         game.saucer?.let { buildSaucer(it) }
         if (game.shipAlive) buildShip()
-        for (b in game.bullets) {
-            if (b.hostile) {
-                val hue = (game.time * 0.8f) % 1f
-                hsv(hue, 0.85f, 1f)
-                fx.v(b.x, 0.5f, b.z, rgb[0], rgb[1], rgb[2], 1f)
-                lines.line(b.x, 0.5f, b.z, b.x - b.vx * 0.04f, 0.5f, b.z - b.vz * 0.04f, rgb[0], rgb[1], rgb[2], 0.7f)
-            } else {
-                fx.v(b.x, 0.5f, b.z, 0.5f, 1f, 1f, 1f)
-                lines.line(b.x, 0.5f, b.z, b.x - b.vx * 0.03f, 0.5f, b.z - b.vz * 0.03f, 0.4f, 1f, 1f, 0.75f)
-            }
-        }
-        for (pt in game.particles) {
+        val bs = game.bullets
+        for (i in 0 until bs.size) buildBullet(bs[i])
+        val ps = game.particles
+        for (i in 0 until ps.size) {
+            val pt = ps[i]
             val k = (pt.life / pt.maxLife).coerceIn(0f, 1f)
             hsv(pt.hue, 1f, 1f)
             fx.v(pt.x, pt.y, pt.z, rgb[0], rgb[1], rgb[2], k)
+        }
+    }
+
+    /** A bolt, wrap-ghosted so it stays visible as it crosses an edge. */
+    private fun buildBullet(b: com.tapmeteors.engine.Bullet) {
+        val nx = ghostOffsets(b.x, 0.6f, FW, ghX)
+        val nz = ghostOffsets(b.z, 0.6f, FH, ghZ)
+        if (b.hostile) hsv((game.time * 0.8f) % 1f, 0.85f, 1f)
+        val r = if (b.hostile) rgb[0] else 0.5f
+        val g = if (b.hostile) rgb[1] else 1f
+        val bl = if (b.hostile) rgb[2] else 1f
+        val trail = if (b.hostile) 0.04f else 0.03f
+        val a = if (b.hostile) 0.7f else 0.75f
+        for (ix in 0 until nx) for (iz in 0 until nz) {
+            val x = b.x + ghX[ix]; val z = b.z + ghZ[iz]
+            fx.v(x, 0.5f, z, r, g, bl, 1f)
+            lines.line(x, 0.5f, z, x - b.vx * trail, 0.5f, z - b.vz * trail, r, g, bl, a)
         }
     }
 
@@ -150,27 +177,38 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
     }
 
     /**
-     * No walls, no rectangle: space just continues (ships wrap at the screen
-     * edge, arcade-style). A faint synthwave floor grid runs past the visible
-     * field in every direction and throbs with the heartbeat.
+     * No walls: the floor grid covers exactly the play area and stops, so its
+     * edge quietly marks where the world wraps (Asteroids-style) without a
+     * boxed-in border. It brightens with the heartbeat. Objects crossing the
+     * edge are ghost-drawn on the far side (see the *Ghosted / ghostOffsets
+     * paths), so the ship visibly reemerges rather than popping.
      */
     private fun buildFloor() {
-        hsv((game.time * 0.05f + 0.55f) % 1f, 0.7f, 0.35f)
-        val a = 0.09f + 0.14f * game.beatPulse
-        var gx = -16f
-        while (gx <= FW + 16f) {
-            lines.line(gx, 0f, -16f, gx, 0f, FH + 16f, rgb[0], rgb[1], rgb[2], a)
-            gx += 8f
+        hsv((game.time * 0.05f + 0.55f) % 1f, 0.7f, 0.4f)
+        val a = 0.12f + 0.18f * game.beatPulse
+        val edge = 0.22f + 0.3f * game.beatPulse   // the boundary lines glow a touch stronger
+        var gx = 0f
+        while (gx <= FW + 0.01f) {
+            val e = if (gx < 0.01f || gx > FW - 0.01f) edge else a
+            lines.line(gx, 0f, 0f, gx, 0f, FH, rgb[0], rgb[1], rgb[2], e)
+            gx += 5f
         }
-        var gz = -16.5f
-        while (gz <= FH + 16f) {
-            lines.line(-16f, 0f, gz, FW + 16f, 0f, gz, rgb[0], rgb[1], rgb[2], a)
-            gz += 7.5f
+        var gz = 0f
+        while (gz <= FH + 0.01f) {
+            val e = if (gz < 0.01f || gz > FH - 0.01f) edge else a
+            lines.line(0f, 0f, gz, FW, 0f, gz, rgb[0], rgb[1], rgb[2], e)
+            gz += 5f
         }
     }
 
-    /** The wave's collectible: a spinning diamond in the power's signature hue. */
+    /** The wave's collectible: a spinning diamond in the power's signature hue (wrap-ghosted). */
     private fun buildPowerUp(p: com.tapmeteors.engine.PowerUp) {
+        val nx = ghostOffsets(p.x, 1.3f, FW, ghX)
+        val nz = ghostOffsets(p.z, 1.3f, FH, ghZ)
+        for (ix in 0 until nx) for (iz in 0 until nz) drawPowerUpAt(p, p.x + ghX[ix], p.z + ghZ[iz])
+    }
+
+    private fun drawPowerUpAt(p: com.tapmeteors.engine.PowerUp, cx: Float, cz: Float) {
         val hue = powerHue(p.type)
         val pulse = 0.6f + 0.4f * sin(game.time * 6f)
         val y = 0.6f + 0.15f * sin(game.time * 3f)
@@ -180,21 +218,21 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         // spinning diamond (two crossed squares)
         for (half in 0 until 2) {
             val rot = p.spin + half * 0.7854f
-            var px = p.x + cos(rot) * s; var pz = p.z + sin(rot) * s
+            var px = cx + cos(rot) * s; var pz = cz + sin(rot) * s
             for (i in 1..4) {
                 val a2 = rot + i * 1.5708f
-                val vx = p.x + cos(a2) * s; val vz = p.z + sin(a2) * s
+                val vx = cx + cos(a2) * s; val vz = cz + sin(a2) * s
                 lines.line(px, y, pz, vx, y, vz, r, g, b, pulse)
                 px = vx; pz = vz
             }
         }
         // vertical beacon + halo so it reads across the field
-        lines.line(p.x, 0f, p.z, p.x, y + 1.1f, p.z, r, g, b, 0.3f * pulse)
-        ring(p.x, 0.05f, p.z, 1.3f, 12, r, g, b, 0.35f * pulse)
-        fx.v(p.x, y, p.z, 1f, 1f, 1f, pulse)
+        lines.line(cx, 0f, cz, cx, y + 1.1f, cz, r, g, b, 0.3f * pulse)
+        ring(cx, 0.05f, cz, 1.3f, 12, r, g, b, 0.35f * pulse)
+        fx.v(cx, y, cz, 1f, 1f, 1f, pulse)
         // fading urgency blink in the last three seconds
         if (p.life < 3f && (p.life * 5f).toInt() % 2 == 0) {
-            ring(p.x, y, p.z, s * 1.6f, 8, r, g, b, 0.5f)
+            ring(cx, y, cz, s * 1.6f, 8, r, g, b, 0.5f)
         }
     }
 
@@ -206,13 +244,11 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         else -> 0.72f              // violet time warp
     }
 
-    /** Wrap-aware: draw ghost copies when a rock straddles an edge. */
+    /** Wrap-aware: draw ghost copies when a rock straddles an edge (allocation-free). */
     private fun buildMeteorGhosted(m: Meteor) {
-        val oxs = mutableListOf(0f)
-        val ozs = mutableListOf(0f)
-        if (m.x < m.radius) oxs.add(FW) else if (m.x > FW - m.radius) oxs.add(-FW)
-        if (m.z < m.radius) ozs.add(FH) else if (m.z > FH - m.radius) ozs.add(-FH)
-        for (ox in oxs) for (oz in ozs) buildMeteor(m, m.x + ox, m.z + oz)
+        val nx = ghostOffsets(m.x, m.radius, FW, ghX)
+        val nz = ghostOffsets(m.z, m.radius, FH, ghZ)
+        for (ix in 0 until nx) for (iz in 0 until nz) buildMeteor(m, m.x + ghX[ix], m.z + ghZ[iz])
     }
 
     private fun buildMeteor(m: Meteor, x: Float, z: Float) {
@@ -240,35 +276,38 @@ class GLRenderer(private val game: Game) : GLSurfaceView.Renderer {
         fx.v(x, y + apex, z, 1f, 1f, 1f, 0.8f)
     }
 
+    /** Wrap-ghosted so the ship reemerges on the far side instead of popping. */
     private fun buildShip() {
-        val x = game.shipX; val z = game.shipZ
+        val nx = ghostOffsets(game.shipX, 1.7f, FW, ghX)
+        val nz = ghostOffsets(game.shipZ, 1.7f, FH, ghZ)
+        for (ix in 0 until nx) for (iz in 0 until nz) drawShipAt(game.shipX + ghX[ix], game.shipZ + ghZ[iz])
+    }
+
+    private fun drawShipAt(x: Float, z: Float) {
         val hAng = game.heading
-        // Invulnerability shimmer: blink + halo.
         val blink = if (game.invuln > 0f) (0.45f + 0.55f * sin(game.time * 20f)) else 1f
         val y = 0.55f
+        val cr = 0.35f; val cg = 0.95f; val cb = 1f
 
-        fun pt(d: Float, off: Float, rad: Float): Pair<Float, Float> =
-            Pair(x + cos(hAng + off) * rad * d, z + sin(hAng + off) * rad * d)
+        val noseX = x + cos(hAng) * 1.5f; val noseZ = z + sin(hAng) * 1.5f
+        val lwX = x + cos(hAng + 2.55f) * 1.15f; val lwZ = z + sin(hAng + 2.55f) * 1.15f
+        val rwX = x + cos(hAng - 2.55f) * 1.15f; val rwZ = z + sin(hAng - 2.55f) * 1.15f
+        val tailX = x + cos(hAng + 3.1416f) * 0.55f; val tailZ = z + sin(hAng + 3.1416f) * 0.55f
 
-        val nose = pt(1f, 0f, 1.5f)
-        val lw = pt(1f, 2.55f, 1.15f)
-        val rw = pt(1f, -2.55f, 1.15f)
-        val tail = pt(1f, 3.1416f, 0.55f)
-
-        val cyan = floatArrayOf(0.35f, 0.95f, 1f)
-        lines.line(nose.first, y, nose.second, lw.first, y, lw.second, cyan[0], cyan[1], cyan[2], blink)
-        lines.line(nose.first, y, nose.second, rw.first, y, rw.second, cyan[0], cyan[1], cyan[2], blink)
-        lines.line(lw.first, y, lw.second, tail.first, y, tail.second, cyan[0], cyan[1], cyan[2], blink * 0.85f)
-        lines.line(rw.first, y, rw.second, tail.first, y, tail.second, cyan[0], cyan[1], cyan[2], blink * 0.85f)
+        lines.line(noseX, y, noseZ, lwX, y, lwZ, cr, cg, cb, blink)
+        lines.line(noseX, y, noseZ, rwX, y, rwZ, cr, cg, cb, blink)
+        lines.line(lwX, y, lwZ, tailX, y, tailZ, cr, cg, cb, blink * 0.85f)
+        lines.line(rwX, y, rwZ, tailX, y, tailZ, cr, cg, cb, blink * 0.85f)
         // canopy mast for 3D pop
-        lines.line(x, y, z, x, y + 0.9f, z, cyan[0], cyan[1], cyan[2], blink * 0.7f)
+        lines.line(x, y, z, x, y + 0.9f, z, cr, cg, cb, blink * 0.7f)
         fx.v(x, y + 0.95f, z, 1f, 1f, 1f, blink)
 
         if (game.thrustFlash > 0f) {
             val k = game.thrustFlash / 0.22f
-            val flame = pt(1f, 3.1416f, 1.6f + k)
+            val flameX = x + cos(hAng + 3.1416f) * (1.6f + k)
+            val flameZ = z + sin(hAng + 3.1416f) * (1.6f + k)
             hsv(0.09f, 1f, 1f)
-            lines.line(tail.first, y, tail.second, flame.first, y, flame.second, rgb[0], rgb[1], rgb[2], k)
+            lines.line(tailX, y, tailZ, flameX, y, flameZ, rgb[0], rgb[1], rgb[2], k)
         }
         if (game.invuln > 0f) {
             hsv((game.time * 0.5f) % 1f, 0.6f, 1f)

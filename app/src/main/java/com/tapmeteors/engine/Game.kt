@@ -151,6 +151,10 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
 
     private val rng = Random(System.nanoTime())
 
+    // Hoisted so auto-fire allocates no per-shot arrays (GC-churn hygiene).
+    private val SPREAD_ONE = floatArrayOf(0f)
+    private val SPREAD_TRIPLE = floatArrayOf(-0.28f, 0f, 0.28f)
+
     fun boot() {
         highScore = store.highScore
         bestWave = store.bestWave
@@ -306,10 +310,10 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             fireT -= dt
             val interval = if (activePower == PWR_RAPID) FIRE_EVERY * 0.42f else FIRE_EVERY
             val shotCap = if (activePower == PWR_RAPID || activePower == PWR_TRIPLE) 12 else MAX_SHOTS
-            if (fireT <= 0f && state == GameState.PLAYING && bullets.count { !it.hostile } < shotCap) {
+            if (fireT <= 0f && state == GameState.PLAYING && liveShots() < shotCap) {
                 fireT = interval
                 val pierce = activePower == PWR_PIERCE
-                val spreads = if (activePower == PWR_TRIPLE) floatArrayOf(-0.28f, 0f, 0.28f) else floatArrayOf(0f)
+                val spreads = if (activePower == PWR_TRIPLE) SPREAD_TRIPLE else SPREAD_ONE
                 for (off in spreads) {
                     val a = heading + off
                     bullets.add(
@@ -326,7 +330,9 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
         }
 
         // --- meteors drift (time warp slows the rocks, not you) ---
-        for (m in meteors) {
+        // Indexed loops throughout stepWorld: no Iterator allocation each frame.
+        for (mi in 0 until meteors.size) {
+            val m = meteors[mi]
             m.x = wrapX(m.x + m.vx * dt * warp); m.z = wrapZ(m.z + m.vz * dt * warp)
             m.angle += m.spin * dt * warp
         }
@@ -346,8 +352,12 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             var consumed = false
 
             // vs meteors (hostile bolts crack rocks too — no score for those;
-            // piercing bolts carve straight through)
-            for (m in meteors) {
+            // piercing bolts carve straight through). Indexed with the size
+            // captured up-front, so breakMeteor appending split rocks can't
+            // trip a ConcurrentModificationException.
+            val mCount = meteors.size
+            for (mi in 0 until mCount) {
+                val m = meteors[mi]
                 if (!m.alive) continue
                 if (hypot(b.x - m.x, b.z - m.z) < m.radius) {
                     breakMeteor(m, scored = !b.hostile)
@@ -372,15 +382,26 @@ class Game(private val store: SettingsStore, private val host: GameHost) {
             if (consumed) bullets.removeAt(i)
             i--
         }
-        meteors.removeAll { !it.alive }
+        // Compact dead rocks in place (no removeAll iterator/lambda per frame).
+        var mi = meteors.size - 1
+        while (mi >= 0) { if (!meteors[mi].alive) meteors.removeAt(mi); mi-- }
 
         // --- ship body collisions ---
         if (shipAlive && invuln <= 0f && !shipFrozen) {
-            for (m in meteors) if (hypot(m.x - shipX, m.z - shipZ) < m.radius + 0.75f) { shipDown(); break }
+            for (k in 0 until meteors.size) {
+                val m = meteors[k]
+                if (hypot(m.x - shipX, m.z - shipZ) < m.radius + 0.75f) { shipDown(); break }
+            }
             saucer?.let { s ->
                 if (shipAlive && s.alive && hypot(s.x - shipX, s.z - shipZ) < s.radius + 0.8f) shipDown()
             }
         }
+    }
+
+    private fun liveShots(): Int {
+        var n = 0
+        for (i in 0 until bullets.size) if (!bullets[i].hostile) n++
+        return n
     }
 
     private fun updateSaucer(dt: Float) {
